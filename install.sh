@@ -1,11 +1,23 @@
-echo "🚀 Запуск установки Модульного Discord Бота..."
-echo ""
+#!/bin/bash
 
-# 1. Создаем структуру папок
+# ==============================================================================
+# АВТОИСПРАВЛЕНИЕ CRLF (Windows line endings)
+# Если файл сохранён с \r\n, скрипт исправит это и перезапустит себя.
+# ==============================================================================
+if file "$0" | grep -q CRLF; then
+    echo "⚠️ Обнаружены Windows-окончания строк (CRLF). Автоматически исправляю..."
+    sed -i 's/\r$//' "$0"
+    echo "✅ Исправлено. Перезапускаю скрипт..."
+    exec "$0" "$@"
+fi
+
+echo "🚀 Запуск установки Модульного Discord Бота..."
 echo "📁 Создание структуры папок..."
 mkdir -p core modules/economy modules/work modules/games modules/shop web/views data
 
-# 2. Создаем package.json
+# ==============================================================================
+# 1. КОНФИГУРАЦИОННЫЕ ФАЙЛЫ
+# ==============================================================================
 cat << 'EOF' > package.json
 {
   "name": "pro-discord-bot",
@@ -24,9 +36,7 @@ cat << 'EOF' > package.json
 }
 EOF
 
-# 3. Docker файлы
 cat << 'EOF' > docker-compose.yml
-version: '3.8'
 services:
   bot:
     build: .
@@ -51,14 +61,12 @@ EXPOSE 3000
 CMD ["npm", "start"]
 EOF
 
-# 4. index.js
 cat << 'EOF' > index.js
 import './database.js';
 import './web/server.js';
-console.log('🚀 Система инициализирована. Откройте http://localhost:3000');
+console.log('🚀 Система инициализирована.');
 EOF
 
-# 5. database.js
 cat << 'EOF' > database.js
 import Database from 'better-sqlite3';
 import path from 'path';
@@ -77,7 +85,9 @@ mods.forEach(m => stmtMod.run(m.id, m.name));
 export default db;
 EOF
 
-# 6. core/eventBus.js
+# ==============================================================================
+# 2. ЯДРО СИСТЕМЫ
+# ==============================================================================
 cat << 'EOF' > core/eventBus.js
 export class EventBus {
     constructor() { this.listeners = {}; }
@@ -87,7 +97,6 @@ export class EventBus {
 export const eventBus = new EventBus();
 EOF
 
-# 7. core/botManager.js
 cat << 'EOF' > core/botManager.js
 import { Client, GatewayIntentBits, Collection, REST, Routes } from 'discord.js';
 import db from '../database.js';
@@ -127,7 +136,6 @@ export function getSettings() {
 export function saveSetting(key, value) { db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(key, value); }
 EOF
 
-# 8. core/moduleManager.js
 cat << 'EOF' > core/moduleManager.js
 import { readdirSync } from 'fs';
 import { join, dirname } from 'path';
@@ -153,7 +161,9 @@ export async function loadModules(bot, eventBus) {
 }
 EOF
 
-# 9. Модуль: Экономика
+# ==============================================================================
+# 3. МОДУЛИ
+# ==============================================================================
 cat << 'EOF' > modules/economy/index.js
 import { SlashCommandBuilder, EmbedBuilder } from 'discord.js';
 export function init(bot, db, eventBus) {
@@ -176,7 +186,6 @@ export function init(bot, db, eventBus) {
 }
 EOF
 
-# 10. Модуль: Работы
 cat << 'EOF' > modules/work/index.js
 import { SlashCommandBuilder } from 'discord.js';
 export function init(bot, db, eventBus) {
@@ -199,7 +208,6 @@ export function init(bot, db, eventBus) {
 }
 EOF
 
-# 11. Модуль: Мини-игры
 cat << 'EOF' > modules/games/index.js
 import { SlashCommandBuilder } from 'discord.js';
 export function init(bot, db, eventBus) {
@@ -218,7 +226,6 @@ export function init(bot, db, eventBus) {
 }
 EOF
 
-# 12. Модуль: Магазин
 cat << 'EOF' > modules/shop/index.js
 import { SlashCommandBuilder, EmbedBuilder } from 'discord.js';
 export function init(bot, db, eventBus) {
@@ -246,7 +253,9 @@ export function init(bot, db, eventBus) {
 }
 EOF
 
-# 13. Веб-панель (web/server.js)
+# ==============================================================================
+# 4. ВЕБ-ПАНЕЛЬ (С ЯВНЫМ УКАЗАНИЕМ 0.0.0.0 ДЛЯ DOCKER)
+# ==============================================================================
 cat << 'EOF' > web/server.js
 import express from 'express';
 import session from 'express-session';
@@ -366,80 +375,64 @@ app.post('/shop-add', auth, (req, res) => { db.prepare('INSERT INTO shop_items (
 app.post('/shop-del', auth, (req, res) => { db.prepare('DELETE FROM shop_items WHERE id = ?').run(req.body.id); res.redirect('/shop'); });
 
 const PORT = 3000;
-app.listen(PORT, async () => {
-    console.log(`🌐 Веб-панель запущена: http://localhost:${PORT}`);
+// ВАЖНО: '0.0.0.0' гарантирует, что Docker пробросит порт наружу
+app.listen(PORT, '0.0.0.0', async () => {
+    console.log(`🌐 Веб-панель запущена: http://0.0.0.0:${PORT}`);
     await startBot();
 });
 EOF
 
-# 14. .gitignore
 cat << 'EOF' > .gitignore
 node_modules/
 data/
 .env
 EOF
 
-# 15. Запуск Docker
+# ==============================================================================
+# 5. ЗАПУСК DOCKER И ВЫВОД ИНСТРУКЦИЙ
+# ==============================================================================
 echo ""
 echo "📦 Установка зависимостей и запуск через Docker..."
 echo ""
 
-# Функция определения IP сервера
-get_server_ip() {
-    local ip=$(curl -s --max-time 5 ifconfig.me 2>/dev/null || curl -s --max-time 5 ipinfo.io/ip 2>/dev/null)
-    if [ -z "$ip" ]; then
-        ip=$(hostname -I | awk '{print $1}')
-    fi
-    if [ -z "$ip" ]; then
-        ip="localhost"
-    fi
-    echo "$ip"
-}
-
-# Проверка Docker и запуск
-if command -v docker &> /dev/null && (docker compose version &> /dev/null || command -v docker-compose &> /dev/null); then
-    # Используем docker compose или docker-compose
-    if docker compose version &> /dev/null; then
-        docker compose up -d --build
-    else
-        docker-compose up -d --build
-    fi
-    
-    echo ""
-    echo "⏳ Ожидание запуска контейнера..."
-    sleep 5
-    
-    # Получаем IP
-    SERVER_IP=$(get_server_ip)
-    
-    echo ""
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "✅ УСТАНОВКА ЗАВЕРШЕНА УСПЕШНО!"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo ""
-    echo "🌐 Откройте веб-панель в браузере:"
-    echo ""
-    echo "   👉 http://${SERVER_IP}:3000"
-    echo ""
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo ""
-    echo "📋 Полезные команды:"
-    echo "   • Логи:        cd EDB && docker compose logs -f"
-    echo "   • Остановить:  cd EDB && docker compose stop"
-    echo "   • Запустить:   cd EDB && docker compose start"
-    echo "   • Перезапуск:  cd EDB && docker compose restart"
-    echo ""
-    echo "🔧 Если панель не открывается, проверьте:"
-    echo "   • Firewall:    sudo ufw allow 3000/tcp"
-    echo "   • Контейнер:   docker ps"
-    echo ""
-else
+if ! command -v docker &> /dev/null; then
     echo "⚠️ Docker не найден!"
-    echo ""
-    echo "Установите Docker командой:"
-    echo "  sudo apt install docker.io docker-compose -y"
-    echo ""
-    echo "Затем запустите установку снова:"
-    echo "  ./install.sh"
+    echo "Установите его командой: sudo apt install docker.io docker-compose-plugin -y"
+    echo "Затем запустите скрипт снова: ./install.sh"
     exit 1
 fi
+
+docker compose up -d --build
+
+echo ""
+echo "⏳ Ожидание запуска контейнера..."
+sleep 4
+
+# Умное определение IP
+PUBLIC_IP=$(curl -4 -s --max-time 3 https://api.ipify.org 2>/dev/null)
+LOCAL_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "✅ УСТАНОВКА ЗАВЕРШЕНА УСПЕШНО!"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+echo "🌐 Откройте веб-панель в браузере:"
+echo ""
+if [ -n "$PUBLIC_IP" ]; then
+    echo "   👉 По публичному IP:  http://${PUBLIC_IP}:3000"
+fi
+if [ -n "$LOCAL_IP" ]; then
+    echo "   👉 По локальному IP:   http://${LOCAL_IP}:3000"
+fi
+echo "   👉 Если вы на этом ПК:    http://localhost:3000"
+echo ""
+echo "⚠️  ВАЖНО: Если ссылки выше не открываются, используйте"
+echo "   IP-адрес из панели управления вашего хостинга (VPS)."
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+echo "📋 Полезные команды:"
+echo "   • Логи:        cd EDB && docker compose logs -f"
+echo "   • Остановить:  cd EDB && docker compose stop"
+echo "   • Перезапуск:  cd EDB && docker compose restart"
+echo ""
