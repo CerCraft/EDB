@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==============================================================================
-# 0. АВТОИСПРАВЛЕНИЕ CRLF
+# 0. АВТОИСПРАВЛЕНИЕ CRLF (Windows line endings)
 # ==============================================================================
 if file "$0" | grep -q CRLF; then
     echo "⚠️ Обнаружены Windows-окончания строк (CRLF). Автоматически исправляю..."
@@ -10,10 +10,10 @@ if file "$0" | grep -q CRLF; then
     exec "$0" "$@"
 fi
 
-echo "🚀 Запуск установки Продвинутого Discord Бота..."
+echo "🚀 Запуск установки Продвинутого Discord Бота (v4.0)..."
 
 # ==============================================================================
-# 1. АВТОМАТИЧЕСКАЯ УСТАНОВКА ЗАВИСИМОСТЕЙ
+# 1. ПРОВЕРКА И УСТАНОВКА ЗАВИСИМОСТЕЙ
 # ==============================================================================
 echo "🔍 Проверка системных зависимостей..."
 install_pkg() { echo "📦 Установка $1..."; sudo apt-get update -qq; sudo apt-get install -y $1; }
@@ -36,12 +36,20 @@ else
     COMPOSE_CMD="sudo docker compose"
 fi
 
-echo "✅ Все зависимости проверены."
-mkdir -p core modules/economy modules/work modules/games modules/shop web/views data/uploads
+# ==============================================================================
+# 1.5. БЕЗОПАСНАЯ ОЧИСТКА СТАРОЙ ВЕРСИИ (ВАЖНО!)
+# ==============================================================================
+echo "🧹 Очистка старых файлов проекта для предотвращения конфликтов..."
+# Удаляем только папки и файлы, относящиеся к этому боту
+rm -rf core modules web data
+rm -f package.json package-lock.json docker-compose.yml Dockerfile index.js database.js .gitignore
+echo "✅ Очистка завершена. Начинаем установку с чистого листа."
 
 # ==============================================================================
-# 2. ГЕНЕРАЦИЯ ФАЙЛОВ ПРОЕКТА
+# 2. СОЗДАНИЕ СТРУКТУРЫ И ГЕНЕРАЦИЯ ФАЙЛОВ
 # ==============================================================================
+mkdir -p core modules/economy modules/work modules/games modules/shop web/views data/uploads
+
 cat << 'EOF' > package.json
 {
   "name": "pro-discord-bot",
@@ -116,7 +124,6 @@ const mods = [
 const stmtMod = db.prepare('INSERT OR IGNORE INTO modules (module_id, name, default_icon) VALUES (?, ?, ?)');
 mods.forEach(m => stmtMod.run(m.id, m.name, m.icon));
 
-// Инициализация конфигов по умолчанию
 const defaultConfigs = {
     economy: { currency_icon: '🪙', daily_amount: 100 },
     games: { coinflip_enabled: true, blackjack_enabled: false, blackjack_bg_url: null }
@@ -224,7 +231,6 @@ export async function loadModules(bot, eventBus) {
 }
 EOF
 
-# --- МОДУЛИ (Базовые) ---
 cat << 'EOF' > modules/economy/index.js
 import { SlashCommandBuilder, EmbedBuilder } from 'discord.js';
 import { getModuleConfig } from '../../core/botManager.js';
@@ -263,9 +269,6 @@ export function init(bot, db, eventBus) {
 }
 EOF
 
-# ==============================================================================
-# 3. ВЕБ-ПАНЕЛЬ (С УПРАВЛЕНИЕМ КАНАЛАМИ, КОНФИГАМИ И ПЕРЕЗАПУСКОМ)
-# ==============================================================================
 cat << 'EOF' > web/server.js
 import express from 'express';
 import session from 'express-session';
@@ -310,7 +313,6 @@ const head = `
 const layout = (title, content) => `<!DOCTYPE html><html lang="ru"><head>${head}<title>${title}</title></head><body class="bg-bg text-text min-h-screen flex flex-col">${content}<script>lucide.createIcons();</script></body></html>`;
 const auth = (req, res, next) => req.session.auth ? next() : res.redirect('/login');
 
-// --- AUTH & SETUP (Сокращено для экономии места, логика та же) ---
 app.get('/', async (req, res) => {
     const s = getSettings();
     if (!s.admin_hash) {
@@ -325,86 +327,53 @@ app.get('/', async (req, res) => {
     }
     res.redirect('/dashboard');
 });
+
 app.post('/setup', async (req, res) => {
     const { token, client_id, guild_id, admin_user, admin_pass } = req.body;
     saveSetting('discord_token', token); saveSetting('client_id', client_id); saveSetting('guild_id', guild_id);
     saveSetting('admin_user', admin_user); saveSetting('admin_hash', await bcrypt.hash(admin_pass, 10));
     req.session.auth = true; await startBot(); res.redirect('/dashboard');
 });
+
 app.get('/login', (req, res) => res.send(layout('Вход', `<div class="flex items-center justify-center flex-1"><form method="POST" action="/login" class="bg-card border border-border rounded-xl p-8 w-full max-w-sm"><h2 class="text-xl font-semibold text-white mb-4 text-center">Вход</h2><input name="user" placeholder="Логин" required class="w-full bg-bg border border-border rounded-lg px-3 py-2.5 mb-3 text-white"><input type="password" name="pass" placeholder="Пароль" required class="w-full bg-bg border border-border rounded-lg px-3 py-2.5 mb-4 text-white"><button class="w-full bg-accent hover:bg-accentHover text-white font-medium py-2.5 rounded-lg">Войти</button></form></div>`)));
 app.post('/login', async (req, res) => { const s = getSettings(); if (req.body.user === s.admin_user && await bcrypt.compare(req.body.pass, s.admin_hash)) { req.session.auth = true; res.redirect('/dashboard'); } else { res.send(`<script>alert('Ошибка'); window.location='/login';</script>`); } });
 app.get('/logout', (req, res) => { req.session.destroy(); res.redirect('/login'); });
 
-// --- RESTART API ---
-app.post('/api/restart', auth, async (req, res) => {
-    await startBot();
-    res.json({ success: true });
-});
+app.post('/api/restart', auth, async (req, res) => { await startBot(); res.json({ success: true }); });
 
-// --- CHANNELS API ---
 app.get('/api/channels', auth, async (req, res) => {
-    const bot = getBot();
-    const settings = getSettings();
+    const bot = getBot(); const settings = getSettings();
     if (!bot || !settings.guild_id) return res.status(500).json({ error: 'Бот оффлайн или не настроен' });
     const guild = bot.guilds.cache.get(settings.guild_id);
     if (!guild) return res.status(404).json({ error: 'Сервер не найден' });
-    
-    const channels = guild.channels.cache
-        .filter(c => c.type === 0 || c.type === 2 || c.type === 4) // Text, Voice, Category
-        .map(c => ({ id: c.id, name: c.name, type: c.type === 4 ? 'category' : (c.type === 2 ? 'voice' : 'text'), parentId: c.parentId }));
+    const channels = guild.channels.cache.filter(c => c.type === 0 || c.type === 2 || c.type === 4).map(c => ({ id: c.id, name: c.name, type: c.type === 4 ? 'category' : (c.type === 2 ? 'voice' : 'text'), parentId: c.parentId }));
     res.json(channels);
 });
 
 app.post('/api/channels', auth, async (req, res) => {
-    const bot = getBot();
-    const settings = getSettings();
+    const bot = getBot(); const settings = getSettings();
     if (!bot) return res.status(500).json({ error: 'Бот оффлайн' });
     const guild = bot.guilds.cache.get(settings.guild_id);
     try {
-        const channel = await guild.channels.create({
-            name: req.body.name,
-            type: req.body.type === 'voice' ? 2 : (req.body.type === 'category' ? 4 : 0),
-            parent: req.body.parentId || null
-        });
+        const channel = await guild.channels.create({ name: req.body.name, type: req.body.type === 'voice' ? 2 : (req.body.type === 'category' ? 4 : 0), parent: req.body.parentId || null });
         res.json({ success: true, id: channel.id });
     } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.delete('/api/channels/:id', auth, async (req, res) => {
-    const bot = getBot();
-    const guild = bot.guilds.cache.get(getSettings().guild_id);
-    try {
-        const channel = guild.channels.cache.get(req.params.id);
-        if (channel) { await channel.delete(); res.json({ success: true }); }
-        else res.status(404).json({ error: 'Не найден' });
-    } catch (e) { res.status(500).json({ error: e.message }); }
+    const bot = getBot(); const guild = bot.guilds.cache.get(getSettings().guild_id);
+    try { const channel = guild.channels.cache.get(req.params.id); if (channel) { await channel.delete(); res.json({ success: true }); } else res.status(404).json({ error: 'Не найден' }); } 
+    catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// --- MODULE CONFIG API ---
-app.get('/api/module-config/:id', auth, (req, res) => {
-    res.json(getModuleConfig(req.params.id));
-});
+app.get('/api/module-config/:id', auth, (req, res) => { res.json(getModuleConfig(req.params.id)); });
 app.post('/api/module-config/:id', upload.single('file'), auth, (req, res) => {
-    const moduleId = req.params.id;
-    let config = getModuleConfig(moduleId);
-    
-    // Обновляем текстовые поля из req.body
-    for (const key in req.body) {
-        if (req.body[key] === 'true') config[key] = true;
-        else if (req.body[key] === 'false') config[key] = false;
-        else config[key] = req.body[key];
-    }
-    
-    // Обработка загрузки файла (например, фон для блэкджека)
-    if (req.file) {
-        config[req.body.file_key || 'custom_image'] = `/uploads/${req.file.filename}`;
-    }
-    
-    saveModuleConfig(moduleId, config);
-    res.json({ success: true });
+    const moduleId = req.params.id; let config = getModuleConfig(moduleId);
+    for (const key in req.body) { if (req.body[key] === 'true') config[key] = true; else if (req.body[key] === 'false') config[key] = false; else config[key] = req.body[key]; }
+    if (req.file) config[req.body.file_key || 'custom_image'] = `/uploads/${req.file.filename}`;
+    saveModuleConfig(moduleId, config); res.json({ success: true });
 });
 
-// --- DASHBOARD UI ---
 app.get('/dashboard', auth, (req, res) => {
     const mods = db.prepare('SELECT * FROM modules').all();
     const isOnline = getBot() !== null;
@@ -412,88 +381,53 @@ app.get('/dashboard', auth, (req, res) => {
 
     res.send(layout('Панель управления', `
         <nav class="bg-card border-b border-border px-6 py-4 flex justify-between items-center sticky top-0 z-10">
-            <div class="flex items-center gap-3">
-                <i data-lucide="layout-dashboard" class="icon text-accent"></i>
-                <h1 class="text-lg font-semibold text-white">Панель управления</h1>
-            </div>
+            <div class="flex items-center gap-3"><i data-lucide="layout-dashboard" class="icon text-accent"></i><h1 class="text-lg font-semibold text-white">Панель управления</h1></div>
             <div class="flex items-center gap-4">
-                <div class="flex items-center gap-2 text-sm">
-                    <span class="w-2 h-2 rounded-full ${isOnline ? 'bg-green-500' : 'bg-red-500'}"></span>
-                    <span class="${isOnline ? 'text-green-400' : 'text-red-400'}">${isOnline ? 'Онлайн' : 'Оффлайн'}</span>
-                </div>
-                <button onclick="restartBot()" class="bg-zinc-800 hover:bg-zinc-700 text-white text-sm font-medium py-2 px-3 rounded-lg flex items-center gap-2 transition-colors">
-                    <i data-lucide="refresh-cw" class="icon"></i> Перезапустить бота
-                </button>
+                <div class="flex items-center gap-2 text-sm"><span class="w-2 h-2 rounded-full ${isOnline ? 'bg-green-500' : 'bg-red-500'}"></span><span class="${isOnline ? 'text-green-400' : 'text-red-400'}">${isOnline ? 'Онлайн' : 'Оффлайн'}</span></div>
+                <button onclick="restartBot()" class="bg-zinc-800 hover:bg-zinc-700 text-white text-sm font-medium py-2 px-3 rounded-lg flex items-center gap-2 transition-colors"><i data-lucide="refresh-cw" class="icon"></i> Перезапустить</button>
                 <a href="/logout" class="text-muted hover:text-white transition-colors flex items-center gap-1.5 text-sm"><i data-lucide="log-out" class="icon"></i></a>
             </div>
         </nav>
-        
         <main class="flex-1 p-6 max-w-5xl mx-auto w-full">
-            <!-- Tabs -->
             <div class="flex gap-6 border-b border-border mb-6">
                 <button onclick="showTab('modules')" id="tab-modules" class="pb-3 text-sm font-medium tab-active flex items-center gap-2"><i data-lucide="puzzle" class="icon"></i> Модули</button>
                 <button onclick="showTab('channels')" id="tab-channels" class="pb-3 text-sm font-medium text-muted hover:text-white flex items-center gap-2"><i data-lucide="hash" class="icon"></i> Каналы сервера</button>
             </div>
-
-            <!-- Modules Tab -->
             <div id="view-modules" class="space-y-4">
-                ${mods.map(m => {
-                    const defIcon = defaultIcons[m.module_id] || 'box';
-                    return `<div class="bg-card border border-border rounded-xl p-4 flex justify-between items-center">
-                        <div class="flex items-center gap-4">
-                            <div class="w-10 h-10 rounded-lg bg-bg border border-border flex items-center justify-center text-accent">
-                                <i data-lucide="${defIcon}" class="icon"></i>
-                            </div>
-                            <div>
-                                <h3 class="font-medium text-white">${m.name}</h3>
-                                <p class="text-xs text-muted">${m.enabled ? 'Активен' : 'Отключен'}</p>
-                            </div>
-                        </div>
-                        <div class="flex items-center gap-3">
-                            <button onclick="openConfig('${m.module_id}', '${m.name}')" class="text-muted hover:text-white p-2 rounded-lg hover:bg-zinc-800 transition-colors" title="Настроить">
-                                <i data-lucide="settings" class="icon"></i>
+                ${mods.map(m => `<div class="bg-card border border-border rounded-xl p-4 flex justify-between items-center">
+                    <div class="flex items-center gap-4">
+                        <div class="w-10 h-10 rounded-lg bg-bg border border-border flex items-center justify-center text-accent"><i data-lucide="${defaultIcons[m.module_id] || 'box'}" class="icon"></i></div>
+                        <div><h3 class="font-medium text-white">${m.name}</h3><p class="text-xs text-muted">${m.enabled ? 'Активен' : 'Отключен'}</p></div>
+                    </div>
+                    <div class="flex items-center gap-3">
+                        <button onclick="openConfig('${m.module_id}', '${m.name}')" class="text-muted hover:text-white p-2 rounded-lg hover:bg-zinc-800 transition-colors" title="Настроить"><i data-lucide="settings" class="icon"></i></button>
+                        <form method="POST" action="/toggle">
+                            <input type="hidden" name="id" value="${m.module_id}"><input type="hidden" name="enabled" value="${m.enabled ? 0 : 1}">
+                            <button type="submit" class="px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 ${m.enabled ? 'bg-red-500/10 text-red-400 hover:bg-red-500/20' : 'bg-green-500/10 text-green-400 hover:bg-green-500/20'}">
+                                <i data-lucide="${m.enabled ? 'toggle-right' : 'toggle-left'}" class="icon"></i>${m.enabled ? 'Выключить' : 'Включить'}
                             </button>
-                            <form method="POST" action="/toggle">
-                                <input type="hidden" name="id" value="${m.module_id}">
-                                <input type="hidden" name="enabled" value="${m.enabled ? 0 : 1}">
-                                <button type="submit" class="px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 ${m.enabled ? 'bg-red-500/10 text-red-400 hover:bg-red-500/20' : 'bg-green-500/10 text-green-400 hover:bg-green-500/20'}">
-                                    <i data-lucide="${m.enabled ? 'toggle-right' : 'toggle-left'}" class="icon"></i>
-                                    ${m.enabled ? 'Выключить' : 'Включить'}
-                                </button>
-                            </form.>
-                        </div>
-                    </div>`;
-                }).join('')}
+                        </form>
+                    </div>
+                </div>`).join('')}
             </div>
-
-            <!-- Channels Tab -->
             <div id="view-channels" class="hidden space-y-4">
                 <div class="bg-card border border-border rounded-xl p-4">
                     <h3 class="font-medium text-white mb-4 flex items-center gap-2"><i data-lucide="plus" class="icon"></i> Создать канал</h3>
                     <form id="createChannelForm" class="flex gap-3">
                         <input type="text" name="name" placeholder="Название канала" required class="flex-1 bg-bg border border-border rounded-lg px-3 py-2 text-sm text-white">
                         <select name="type" class="bg-bg border border-border rounded-lg px-3 py-2 text-sm text-white">
-                            <option value="text">Текстовый</option>
-                            <option value="voice">Голосовой</option>
-                            <option value="category">Категория</option>
+                            <option value="text">Текстовый</option><option value="voice">Голосовой</option><option value="category">Категория</option>
                         </select>
-                        <button type="submit" class="bg-accent hover:bg-accentHover text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2">
-                            <i data-lucide="plus-circle" class="icon"></i> Создать
-                        </button>
+                        <button type="submit" class="bg-accent hover:bg-accentHover text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2"><i data-lucide="plus-circle" class="icon"></i> Создать</button>
                     </form>
                 </div>
-                <div id="channelsList" class="space-y-2">
-                    <p class="text-muted text-center py-8">Загрузка каналов...</p>
-                </div>
+                <div id="channelsList" class="space-y-2"><p class="text-muted text-center py-8">Загрузка каналов...</p></div>
             </div>
         </main>
-
-        <!-- Config Modal -->
         <div id="configModal" class="fixed inset-0 bg-black/70 hidden items-center justify-center z-50 p-4">
             <div class="bg-card border border-border rounded-xl p-6 w-full max-w-lg">
                 <h3 id="configTitle" class="text-lg font-semibold text-white mb-4">Настройка</h3>
-                <form id="configForm" class="space-y-4">
-                    <div id="configFields"></div>
+                <form id="configForm" class="space-y-4"><div id="configFields"></div>
                     <div class="flex justify-end gap-3 pt-4">
                         <button type="button" onclick="closeConfig()" class="px-4 py-2 text-muted hover:text-white text-sm">Отмена</button>
                         <button type="submit" class="bg-accent hover:bg-accentHover text-white px-4 py-2 rounded-lg text-sm font-medium">Сохранить</button>
@@ -501,7 +435,6 @@ app.get('/dashboard', auth, (req, res) => {
                 </form>
             </div>
         </div>
-
         <script>
             function showTab(tab) {
                 document.getElementById('view-modules').classList.add('hidden');
@@ -510,15 +443,12 @@ app.get('/dashboard', auth, (req, res) => {
                 document.getElementById('tab-modules').classList.add('text-muted');
                 document.getElementById('tab-channels').classList.remove('tab-active', 'text-white');
                 document.getElementById('tab-channels').classList.add('text-muted');
-                
                 document.getElementById('view-' + tab).classList.remove('hidden');
                 document.getElementById('tab-' + tab).classList.add('tab-active', 'text-white');
                 document.getElementById('tab-' + tab).classList.remove('text-muted');
-                
                 if (tab === 'channels') loadChannels();
                 lucide.createIcons();
             }
-
             async function restartBot() {
                 const btn = event.currentTarget;
                 btn.innerHTML = '<i data-lucide="loader-2" class="icon animate-spin"></i> Перезапуск...';
@@ -526,85 +456,54 @@ app.get('/dashboard', auth, (req, res) => {
                 await fetch('/api/restart', { method: 'POST' });
                 setTimeout(() => location.reload(), 1500);
             }
-
             async function loadChannels() {
                 const res = await fetch('/api/channels');
                 const data = await res.json();
                 const list = document.getElementById('channelsList');
                 if (data.error) { list.innerHTML = '<p class="text-red-400 text-center py-8">' + data.error + '</p>'; return; }
-                
-                list.innerHTML = data.map(c => `
-                    <div class="bg-bg border border-border rounded-lg p-3 flex justify-between items-center">
-                        <div class="flex items-center gap-3">
-                            <i data-lucide="${c.type === 'voice' ? 'volume-2' : (c.type === 'category' ? 'folder' : 'hash')}" class="icon text-muted"></i>
-                            <span class="text-sm text-white">${c.name}</span>
-                        </div>
-                        <button onclick="deleteChannel('${c.id}')" class="text-red-400 hover:text-red-300 p-1"><i data-lucide="trash-2" class="icon"></i></button>
-                    </div>
-                `).join('');
+                list.innerHTML = data.map(c => \`<div class="bg-bg border border-border rounded-lg p-3 flex justify-between items-center">
+                    <div class="flex items-center gap-3"><i data-lucide="\${c.type === 'voice' ? 'volume-2' : (c.type === 'category' ? 'folder' : 'hash')}" class="icon text-muted"></i><span class="text-sm text-white">\${c.name}</span></div>
+                    <button onclick="deleteChannel('\${c.id}')" class="text-red-400 hover:text-red-300 p-1"><i data-lucide="trash-2" class="icon"></i></button>
+                </div>\`).join('');
                 lucide.createIcons();
             }
-
             async function deleteChannel(id) {
                 if(!confirm('Удалить этот канал с Discord сервера?')) return;
                 await fetch('/api/channels/' + id, { method: 'DELETE' });
                 loadChannels();
             }
-
             document.getElementById('createChannelForm').onsubmit = async (e) => {
                 e.preventDefault();
                 const formData = new FormData(e.target);
-                await fetch('/api/channels', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(Object.fromEntries(formData))
-                });
-                e.target.reset();
-                loadChannels();
+                await fetch('/api/channels', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.fromEntries(formData)) });
+                e.target.reset(); loadChannels();
             };
-
             let currentModule = '';
             async function openConfig(moduleId, moduleName) {
                 currentModule = moduleId;
                 document.getElementById('configTitle').innerText = 'Настройка: ' + moduleName;
                 document.getElementById('configModal').classList.remove('hidden');
                 document.getElementById('configModal').classList.add('flex');
-                
                 const res = await fetch('/api/module-config/' + moduleId);
                 const config = await res.json();
                 const fields = document.getElementById('configFields');
                 fields.innerHTML = '';
-
                 if (moduleId === 'economy') {
-                    fields.innerHTML = \`
-                        <div><label class="block text-xs text-muted mb-1">Иконка валюты (эмодзи или текст)</label>
-                        <input name="currency_icon" value="\${config.currency_icon || '🪙'}" class="w-full bg-bg border border-border rounded-lg px-3 py-2 text-white"></div>
-                        <div><label class="block text-xs text-muted mb-1">Сумма ежедневной награды</label>
-                        <input type="number" name="daily_amount" value="\${config.daily_amount || 100}" class="w-full bg-bg border border-border rounded-lg px-3 py-2 text-white"></div>
-                    \`;
+                    fields.innerHTML = \`<div><label class="block text-xs text-muted mb-1">Иконка валюты (эмодзи)</label><input name="currency_icon" value="\${config.currency_icon || '🪙'}" class="w-full bg-bg border border-border rounded-lg px-3 py-2 text-white"></div>
+                    <div><label class="block text-xs text-muted mb-1">Сумма ежедневной награды</label><input type="number" name="daily_amount" value="\${config.daily_amount || 100}" class="w-full bg-bg border border-border rounded-lg px-3 py-2 text-white"></div>\`;
                 } else if (moduleId === 'games') {
-                    fields.innerHTML = \`
-                        <div class="flex items-center gap-3"><input type="checkbox" name="coinflip_enabled" \${config.coinflip_enabled ? 'checked' : ''} class="rounded bg-bg border-border text-accent"> <span class="text-sm text-white">Включить игру "Орел и Решка"</span></div>
-                        <div class="flex items-center gap-3"><input type="checkbox" name="blackjack_enabled" \${config.blackjack_enabled ? 'checked' : ''} class="rounded bg-bg border-border text-accent"> <span class="text-sm text-white">Включить игру "Блэкджек" (скоро)</span></div>
-                        <div><label class="block text-xs text-muted mb-1">Фон для Блэкджека (картинка)</label>
-                        <input type="file" name="file" data-key="blackjack_bg_url" accept="image/*" class="w-full text-sm text-muted file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-accent file:text-white"></div>
-                    \`;
-                } else {
-                    fields.innerHTML = '<p class="text-muted text-sm">Дополнительные настройки для этого модуля скоро появятся.</p>';
-                }
+                    fields.innerHTML = \`<div class="flex items-center gap-3"><input type="checkbox" name="coinflip_enabled" \${config.coinflip_enabled ? 'checked' : ''} class="rounded bg-bg border-border text-accent"> <span class="text-sm text-white">Включить "Орел и Решка"</span></div>
+                    <div class="flex items-center gap-3"><input type="checkbox" name="blackjack_enabled" \${config.blackjack_enabled ? 'checked' : ''} class="rounded bg-bg border-border text-accent"> <span class="text-sm text-white">Включить "Блэкджек" (скоро)</span></div>
+                    <div><label class="block text-xs text-muted mb-1">Фон для Блэкджека (картинка)</label><input type="file" name="file" data-key="blackjack_bg_url" accept="image/*" class="w-full text-sm text-muted file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-accent file:text-white"></div>\`;
+                } else { fields.innerHTML = '<p class="text-muted text-sm">Дополнительные настройки скоро появятся.</p>'; }
             }
-
-            function closeConfig() {
-                document.getElementById('configModal').classList.add('hidden');
-                document.getElementById('configModal').classList.remove('flex');
-            }
-
+            function closeConfig() { document.getElementById('configModal').classList.add('hidden'); document.getElementById('configModal').classList.remove('flex'); }
             document.getElementById('configForm').onsubmit = async (e) => {
                 e.preventDefault();
                 const formData = new FormData(e.target);
                 await fetch('/api/module-config/' + currentModule, { method: 'POST', body: formData });
                 closeConfig();
-                alert('Настройки сохранены! Не забудьте нажать "Перезапустить бота" в шапке, если изменили команды.');
+                alert('Настройки сохранены! Нажмите "Перезапустить" в шапке, если изменили команды.');
             };
             lucide.createIcons();
         </script>
@@ -630,7 +529,7 @@ data/
 EOF
 
 # ==============================================================================
-# 4. ЗАПУСК
+# 3. ЗАПУСК DOCKER
 # ==============================================================================
 echo ""
 echo "📦 Сборка и запуск контейнера..."
