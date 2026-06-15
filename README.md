@@ -9,7 +9,7 @@
 [![Docker](https://img.shields.io/badge/docker-required-2496ED?style=flat-square&logo=docker&logoColor=white)](https://www.docker.com/)
 [![License](https://img.shields.io/badge/license-MIT-yellow?style=flat-square)](LICENSE)
 
-[📖 Документация](#документация) • [🚀 Быстрый старт](#быстрый-старт) • [💬 Поддержка](#поддержка)
+[📖 Документация](#документация)
 
 </div>
 
