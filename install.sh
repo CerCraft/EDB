@@ -1,13 +1,13 @@
 #!/bin/bash
 
 echo "🚀 Запуск установки Модульного Discord Бота..."
+echo ""
 
 # 1. Создаем структуру папок
 echo "📁 Создание структуры папок..."
 mkdir -p core modules/economy modules/work modules/games modules/shop web/views data
 
-# 2. Создаем файлы проекта (используем 'EOF' чтобы bash не ломал код JS)
-
+# 2. Создаем package.json
 cat << 'EOF' > package.json
 {
   "name": "pro-discord-bot",
@@ -26,6 +26,7 @@ cat << 'EOF' > package.json
 }
 EOF
 
+# 3. Docker файлы
 cat << 'EOF' > docker-compose.yml
 version: '3.8'
 services:
@@ -52,30 +53,33 @@ EXPOSE 3000
 CMD ["npm", "start"]
 EOF
 
+# 4. index.js
 cat << 'EOF' > index.js
 import './database.js';
 import './web/server.js';
 console.log('🚀 Система инициализирована. Откройте http://localhost:3000');
 EOF
 
+# 5. database.js
 cat << 'EOF' > database.js
 import Database from 'better-sqlite3';
 import path from 'path';
 import { fileURLToPath } from 'url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const db = new Database(path.join(__dirname, 'data', 'bot.db'));
-db.exec(\`
+db.exec(`
     CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
     CREATE TABLE IF NOT EXISTS modules (module_id TEXT PRIMARY KEY, name TEXT, enabled INTEGER DEFAULT 1);
     CREATE TABLE IF NOT EXISTS users (user_id TEXT, guild_id TEXT, balance INTEGER DEFAULT 0, last_work INTEGER DEFAULT 0, last_daily INTEGER DEFAULT 0, PRIMARY KEY (user_id, guild_id));
     CREATE TABLE IF NOT EXISTS shop_items (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, price INTEGER, role_id TEXT, description TEXT);
-\`);
+`);
 const mods = [{id:'economy', name:'💰 Экономика'}, {id:'work', name:'⚒️ Работы'}, {id:'games', name:'🎲 Мини-игры'}, {id:'shop', name:'🛒 Магазин'}];
 const stmtMod = db.prepare('INSERT OR IGNORE INTO modules (module_id, name) VALUES (?, ?)');
 mods.forEach(m => stmtMod.run(m.id, m.name));
 export default db;
 EOF
 
+# 6. core/eventBus.js
 cat << 'EOF' > core/eventBus.js
 export class EventBus {
     constructor() { this.listeners = {}; }
@@ -85,6 +89,7 @@ export class EventBus {
 export const eventBus = new EventBus();
 EOF
 
+# 7. core/botManager.js
 cat << 'EOF' > core/botManager.js
 import { Client, GatewayIntentBits, Collection, REST, Routes } from 'discord.js';
 import db from '../database.js';
@@ -94,18 +99,18 @@ let bot = null;
 export function getBot() { return bot; }
 export async function startBot() {
     const settings = getSettings();
-    if (!settings.discord_token || !settings.client_id) return console.log('⏳ Ожидание настройки...');
+    if (!settings.discord_token || !settings.client_id) return console.log('⏳ Ожидание настройки через веб-панель...');
     if (bot) { console.log('🔄 Перезапуск бота...'); await bot.destroy(); }
     bot = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildMembers] });
     bot.commands = new Collection();
     bot.once('ready', async () => {
-        console.log(\`✅ Бот подключен: \${bot.user.tag}\`);
+        console.log(`✅ Бот подключен: ${bot.user.tag}`);
         const commandsData = await loadModules(bot, eventBus);
         if (commandsData.length > 0 && settings.guild_id) {
             const rest = new REST({ version: '10' }).setToken(settings.discord_token);
             try {
                 await rest.put(Routes.applicationGuildCommands(settings.client_id, settings.guild_id), { body: commandsData });
-                console.log(\`✅ Зарегистрировано \${commandsData.length} команд\`);
+                console.log(`✅ Зарегистрировано ${commandsData.length} команд`);
             } catch (e) { console.error('❌ Ошибка команд:', e); }
         }
     });
@@ -124,6 +129,7 @@ export function getSettings() {
 export function saveSetting(key, value) { db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(key, value); }
 EOF
 
+# 8. core/moduleManager.js
 cat << 'EOF' > core/moduleManager.js
 import { readdirSync } from 'fs';
 import { join, dirname } from 'path';
@@ -140,16 +146,16 @@ export async function loadModules(bot, eventBus) {
     for (const dir of moduleDirs) {
         if (enabledIds.includes(dir)) {
             try {
-                const module = await import(\`file://\${join(modulesPath, dir, 'index.js')}\`);
+                const module = await import(`file://${join(modulesPath, dir, 'index.js')}`);
                 if (module.init) { const cmds = module.init(bot, db, eventBus); if (cmds) commandsToRegister.push(...cmds); }
-            } catch (err) { console.error(\`❌ Ошибка модуля [\${dir}]:\`, err); }
+            } catch (err) { console.error(`❌ Ошибка модуля [${dir}]:`, err); }
         }
     }
     return commandsToRegister;
 }
 EOF
 
-# --- МОДУЛИ (Краткие версии для примера, можно расширить) ---
+# 9. Модуль: Экономика
 cat << 'EOF' > modules/economy/index.js
 import { SlashCommandBuilder, EmbedBuilder } from 'discord.js';
 export function init(bot, db, eventBus) {
@@ -157,29 +163,45 @@ export function init(bot, db, eventBus) {
     const bal = new SlashCommandBuilder().setName('balance').setDescription('Ваш баланс');
     cmds.push(bal); bot.commands.set('balance', { data: bal, execute: async (i) => {
         const u = db.prepare('SELECT balance FROM users WHERE user_id = ? AND guild_id = ?').get(i.user.id, i.guildId) || { balance: 0 };
-        await i.reply({ embeds: [new EmbedBuilder().setColor('#5865F2').setTitle('💰 Баланс').setDescription(\`У вас **\${u.balance}** монет.\`)] });
+        await i.reply({ embeds: [new EmbedBuilder().setColor('#5865F2').setTitle('💰 Баланс').setDescription(`У вас **${u.balance}** монет.`)] });
+    }});
+    const daily = new SlashCommandBuilder().setName('daily').setDescription('Ежедневная награда');
+    cmds.push(daily); bot.commands.set('daily', { data: daily, execute: async (i) => {
+        const now = Date.now(); let u = db.prepare('SELECT * FROM users WHERE user_id = ? AND guild_id = ?').get(i.user.id, i.guildId) || {};
+        if (u.last_daily && (now - u.last_daily < 86400000)) return i.reply({ content: '⏳ Вы уже получали награду сегодня.', ephemeral: true });
+        if (!u.user_id) db.prepare('INSERT INTO users (user_id, guild_id) VALUES (?, ?)').run(i.user.id, i.guildId);
+        const reward = 100;
+        db.prepare('INSERT INTO users (user_id, guild_id, balance, last_daily) VALUES (?, ?, ?, ?) ON CONFLICT(user_id, guild_id) DO UPDATE SET balance = balance + ?, last_daily = ?').run(i.user.id, i.guildId, reward, now, reward, now);
+        await i.reply({ content: `✅ Вы получили **${reward}** монет!`, ephemeral: true });
     }});
     return cmds;
 }
 EOF
 
+# 10. Модуль: Работы
 cat << 'EOF' > modules/work/index.js
 import { SlashCommandBuilder } from 'discord.js';
 export function init(bot, db, eventBus) {
     const cmds = [];
-    const work = new SlashCommandBuilder().setName('work').setDescription('Поработать');
+    const jobs = ['Шахтёр', 'Дровосек', 'Программист', 'Стример', 'Кузнец'];
+    const work = new SlashCommandBuilder().setName('work').setDescription('Поработать и заработать');
     cmds.push(work); bot.commands.set('work', { data: work, execute: async (i) => {
         const now = Date.now(); let u = db.prepare('SELECT * FROM users WHERE user_id = ? AND guild_id = ?').get(i.user.id, i.guildId) || {};
-        if (u.last_work && (now - u.last_work < 3600000)) return i.reply({ content: '⏳ Отдыхайте.', ephemeral: true });
+        if (u.last_work && (now - u.last_work < 3600000)) {
+            const wait = Math.ceil((3600000 - (now - u.last_work)) / 60000);
+            return i.reply({ content: `⏳ Отдыхайте. Можно работать через ${wait} мин.`, ephemeral: true });
+        }
         if (!u.user_id) db.prepare('INSERT INTO users (user_id, guild_id) VALUES (?, ?)').run(i.user.id, i.guildId);
+        const job = jobs[Math.floor(Math.random() * jobs.length)];
         const reward = Math.floor(Math.random() * 50) + 50;
         db.prepare('INSERT INTO users (user_id, guild_id, balance, last_work) VALUES (?, ?, ?, ?) ON CONFLICT(user_id, guild_id) DO UPDATE SET balance = balance + ?, last_work = ?').run(i.user.id, i.guildId, reward, now, reward, now);
-        await i.reply({ content: \`⚒️ Вы заработали **\${reward}** монет!\`, ephemeral: true });
+        await i.reply({ content: `⚒️ Вы поработали как **${job}** и заработали **${reward}** монет!`, ephemeral: true });
     }});
     return cmds;
 }
 EOF
 
+# 11. Модуль: Мини-игры
 cat << 'EOF' > modules/games/index.js
 import { SlashCommandBuilder } from 'discord.js';
 export function init(bot, db, eventBus) {
@@ -192,12 +214,13 @@ export function init(bot, db, eventBus) {
         const win = Math.random() > 0.5;
         const newBal = win ? u.balance + bet : u.balance - bet;
         db.prepare('INSERT INTO users (user_id, guild_id, balance) VALUES (?, ?, ?) ON CONFLICT(user_id, guild_id) DO UPDATE SET balance = ?').run(i.user.id, i.guildId, newBal, newBal);
-        await i.reply(win ? \`🎉 Орел! Вы выиграли **\${bet}** монет.\` : \`💀 Решка. Вы проиграли **\${bet}** монет.\`);
+        await i.reply(win ? `🎉 Выпал **Орел**! Вы выиграли **${bet}** монет. Баланс: ${newBal}` : `💀 Выпала **Решка**. Вы проиграли **${bet}** монет. Баланс: ${newBal}`);
     }});
     return cmds;
 }
 EOF
 
+# 12. Модуль: Магазин
 cat << 'EOF' > modules/shop/index.js
 import { SlashCommandBuilder, EmbedBuilder } from 'discord.js';
 export function init(bot, db, eventBus) {
@@ -206,26 +229,26 @@ export function init(bot, db, eventBus) {
     cmds.push(shop); bot.commands.set('shop', { data: shop, execute: async (i) => {
         const items = db.prepare('SELECT * FROM shop_items').all();
         if (!items.length) return i.reply('Магазин пуст.');
-        const desc = items.map(item => \`🔹 **\${item.name}** — \${item.price} монет\n*\${item.description}*\`).join('\\n\\n');
+        const desc = items.map(item => `🔹 **${item.name}** — ${item.price} монет\n*${item.description}*`).join('\n\n');
         await i.reply({ embeds: [new EmbedBuilder().setColor('#5865F2').setTitle('🛒 Магазин').setDescription(desc)] });
     }});
-    const buy = new SlashCommandBuilder().setName('buy').setDescription('Купить').addStringOption(o => o.setName('item').setDescription('Название').setRequired(true));
+    const buy = new SlashCommandBuilder().setName('buy').setDescription('Купить товар').addStringOption(o => o.setName('item').setDescription('Название').setRequired(true));
     cmds.push(buy); bot.commands.set('buy', { data: buy, execute: async (i) => {
         const itemName = i.options.getString('item');
-        const item = db.prepare('SELECT * FROM shop_items WHERE LOWER(name) LIKE ?').get(\`%\${itemName.toLowerCase()}%\`);
+        const item = db.prepare('SELECT * FROM shop_items WHERE LOWER(name) LIKE ?').get(`%${itemName.toLowerCase()}%`);
         if (!item) return i.reply({ content: '❌ Товар не найден.', ephemeral: true });
         const u = db.prepare('SELECT balance FROM users WHERE user_id = ? AND guild_id = ?').get(i.user.id, i.guildId) || { balance: 0 };
-        if (u.balance < item.price) return i.reply({ content: \`❌ Нужно \${item.price} монет.\`, ephemeral: true });
+        if (u.balance < item.price) return i.reply({ content: `❌ Нужно ${item.price} монет, у вас ${u.balance}.`, ephemeral: true });
         db.prepare('UPDATE users SET balance = balance - ? WHERE user_id = ? AND guild_id = ?').run(item.price, i.user.id, i.guildId);
-        let msg = \`✅ Вы купили **\${item.name}**!\`;
-        if (item.role_id) { try { const member = await i.guild.members.fetch(i.user.id); await member.roles.add(item.role_id); msg += \`\\n🎭 Роль выдана!\`; } catch(e){} }
+        let msg = `✅ Вы купили **${item.name}** за ${item.price} монет!`;
+        if (item.role_id) { try { const member = await i.guild.members.fetch(i.user.id); await member.roles.add(item.role_id); msg += `\n🎭 Роль выдана!`; } catch(e){ msg += `\n⚠️ Не удалось выдать роль (проверьте права бота).`; } }
         await i.reply({ content: msg, ephemeral: true });
     }});
     return cmds;
 }
 EOF
 
-# --- ВЕБ-ПАНЕЛЬ (Сокращенная, но полностью рабочая версия с Tailwind) ---
+# 13. Веб-панель (web/server.js)
 cat << 'EOF' > web/server.js
 import express from 'express';
 import session from 'express-session';
@@ -240,65 +263,73 @@ const app = express();
 app.use(express.urlencoded({ extended: true }));
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
-app.use(session({ secret: 'secret-key', resave: false, saveUninitialized: true }));
+app.use(session({ secret: 'super-secret-session-key-change-in-prod', resave: false, saveUninitialized: true }));
 
-const tw = \`<script src="https://cdn.tailwindcss.com"></script><script>tailwind.config={theme:{extend:{colors:{blurple:'#5865F2', dark:'#202225', darker:'#18191c', card:'#2f3136'}}}}</script>\`;
-const layout = (t, c) => \`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>\${t}</title>\${tw}</head><body class="bg-dark text-gray-200 font-sans min-h-screen flex flex-col">\${c}</body></html>\`;
+const tw = `<script src="https://cdn.tailwindcss.com"></script><script>tailwind.config={theme:{extend:{colors:{blurple:'#5865F2', dark:'#202225', darker:'#18191c', card:'#2f3136'}}}}</script>`;
+const layout = (t, c) => `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${t}</title>${tw}</head><body class="bg-dark text-gray-200 font-sans min-h-screen flex flex-col">${c}</body></html>`;
 const auth = (req, res, next) => req.session.auth ? next() : res.redirect('/login');
 
 app.get('/', async (req, res) => {
     const s = getSettings();
     if (!s.admin_hash) {
-        return res.send(layout('Настройка', \`<div class="flex items-center justify-center flex-1 p-4"><div class="bg-card p-8 rounded-lg shadow-xl w-full max-w-md border border-gray-700">
+        return res.send(layout('Настройка', `<div class="flex items-center justify-center flex-1 p-4"><div class="bg-card p-8 rounded-lg shadow-xl w-full max-w-md border border-gray-700">
             <h2 class="text-2xl font-bold text-white mb-2">🚀 Настройка бота</h2>
+            <p class="text-gray-400 mb-6 text-sm">Настройте вашего бота за 1 минуту. Данные сохранятся локально.</p>
             <form method="POST" action="/setup" class="space-y-4">
-                <input name="token" placeholder="Discord Bot Token" required class="w-full bg-darker border border-gray-600 rounded p-2 text-white">
-                <input name="client_id" placeholder="Client ID (Application ID)" required class="w-full bg-darker border border-gray-600 rounded p-2 text-white">
-                <input name="guild_id" placeholder="Guild ID (ID сервера)" required class="w-full bg-darker border border-gray-600 rounded p-2 text-white">
+                <div><label class="block text-xs font-bold text-gray-400 mb-1">Discord Bot Token</label><input name="token" required class="w-full bg-darker border border-gray-600 rounded p-2 text-white focus:border-blurple outline-none"></div>
+                <div><label class="block text-xs font-bold text-gray-400 mb-1">Client ID (Application ID)</label><input name="client_id" required class="w-full bg-darker border border-gray-600 rounded p-2 text-white focus:border-blurple outline-none"></div>
+                <div><label class="block text-xs font-bold text-gray-400 mb-1">Guild ID (ID сервера)</label><input name="guild_id" required class="w-full bg-darker border border-gray-600 rounded p-2 text-white focus:border-blurple outline-none"></div>
                 <div class="grid grid-cols-2 gap-4">
-                    <input name="admin_user" placeholder="Логин админа" required class="w-full bg-darker border border-gray-600 rounded p-2 text-white">
-                    <input type="password" name="admin_pass" placeholder="Пароль админа" required class="w-full bg-darker border border-gray-600 rounded p-2 text-white">
+                    <div><label class="block text-xs font-bold text-gray-400 mb-1">Логин админа</label><input name="admin_user" required class="w-full bg-darker border border-gray-600 rounded p-2 text-white focus:border-blurple outline-none"></div>
+                    <div><label class="block text-xs font-bold text-gray-400 mb-1">Пароль админа</label><input type="password" name="admin_pass" required class="w-full bg-darker border border-gray-600 rounded p-2 text-white focus:border-blurple outline-none"></div>
                 </div>
-                <button type="submit" class="w-full bg-blurple hover:bg-indigo-700 text-white font-bold py-2 rounded">Сохранить и Запустить</button>
-            </form></div></div>\`));
+                <button type="submit" class="w-full bg-blurple hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded transition">Сохранить и Запустить</button>
+            </form></div></div>`));
     }
     res.redirect('/dashboard');
 });
 
 app.post('/setup', async (req, res) => {
     const { token, client_id, guild_id, admin_user, admin_pass } = req.body;
+    const admin_hash = await bcrypt.hash(admin_pass, 10);
     saveSetting('discord_token', token); saveSetting('client_id', client_id); saveSetting('guild_id', guild_id);
-    saveSetting('admin_user', admin_user); saveSetting('admin_hash', await bcrypt.hash(admin_pass, 10));
+    saveSetting('admin_user', admin_user); saveSetting('admin_hash', admin_hash);
     req.session.auth = true; await startBot(); res.redirect('/dashboard');
 });
 
 app.get('/login', (req, res) => {
-    res.send(layout('Вход', \`<div class="flex items-center justify-center flex-1"><form method="POST" action="/login" class="bg-card p-8 rounded-lg w-full max-w-sm border border-gray-700">
-        <h2 class="text-xl font-bold text-white mb-4 text-center">Вход</h2>
+    res.send(layout('Вход', `<div class="flex items-center justify-center flex-1"><form method="POST" action="/login" class="bg-card p-8 rounded-lg w-full max-w-sm border border-gray-700">
+        <h2 class="text-xl font-bold text-white mb-4 text-center">Вход в панель</h2>
         <input name="user" placeholder="Логин" required class="w-full bg-darker border border-gray-600 rounded p-2 mb-3 text-white">
         <input type="password" name="pass" placeholder="Пароль" required class="w-full bg-darker border border-gray-600 rounded p-2 mb-4 text-white">
-        <button class="w-full bg-blurple hover:bg-indigo-700 text-white font-bold py-2 rounded">Войти</button></form></div>\`));
+        <button class="w-full bg-blurple hover:bg-indigo-700 text-white font-bold py-2 rounded">Войти</button></form></div>`));
 });
 
 app.post('/login', async (req, res) => {
     const s = getSettings();
-    if (req.body.user === s.admin_user && await bcrypt.compare(req.body.pass, s.admin_hash)) {
-        req.session.auth = true; res.redirect('/dashboard');
-    } else { res.send(\`<script>alert('Неверно'); window.location='/login';</script>\`); }
+    const valid = await bcrypt.compare(req.body.pass, s.admin_hash);
+    if (req.body.user === s.admin_user && valid) { req.session.auth = true; res.redirect('/dashboard'); }
+    else { res.send(`<script>alert('Неверный логин или пароль'); window.location='/login';</script>`); }
 });
 
 app.get('/logout', (req, res) => { req.session.destroy(); res.redirect('/login'); });
 
 app.get('/dashboard', auth, (req, res) => {
     const mods = db.prepare('SELECT * FROM modules').all();
-    const status = getBot() ? '<span class="text-green-400">● Онлайн</span>' : '<span class="text-red-400">● Оффлайн</span>';
-    res.send(layout('Панель', \`<nav class="bg-card border-b border-gray-700 p-4 flex justify-between items-center"><h1 class="text-xl font-bold text-white">⚙️ Панель</h1><div class="flex items-center gap-4"><span class="text-sm">\${status}</span><a href="/logout" class="text-sm text-gray-400">Выйти</a></div></nav>
-        <main class="flex-1 p-8 max-w-4xl mx-auto w-full"><h2 class="text-lg font-semibold mb-4">Модули</h2><div class="grid gap-4">
-        \${mods.map(m => \`<div class="bg-card p-4 rounded-lg border border-gray-700 flex justify-between items-center">
-            <div><h3 class="font-bold text-white">\${m.name}</h3><p class="text-xs text-gray-400">\${m.enabled ? 'Активен' : 'Отключен'}</p></div>
-            <form method="POST" action="/toggle"><input type="hidden" name="id" value="\${m.module_id}"><input type="hidden" name="enabled" value="\${m.enabled ? 0 : 1}">
-            <button type="submit" class="px-4 py-2 rounded text-sm font-bold \${m.enabled ? 'bg-red-500/20 text-red-400' : 'bg-green-500/20 text-green-400'}">\${m.enabled ? 'Выключить' : 'Включить'}</button></form></div>\`).join('')}
-        </div><div class="mt-8 text-center"><a href="/shop" class="inline-block bg-blurple hover:bg-indigo-700 text-white font-bold py-3 px-6 rounded-lg">🛒 Управление магазином</a></div></main>\`));
+    const status = getBot() ? '<span class="text-green-400">● Онлайн</span>' : '<span class="text-red-400">● Оффлайн (проверьте токен)</span>';
+    res.send(layout('Панель управления', `<nav class="bg-card border-b border-gray-700 p-4 flex justify-between items-center">
+        <h1 class="text-xl font-bold text-white">⚙️ Панель управления</h1>
+        <div class="flex items-center gap-4"><span class="text-sm">${status}</span><a href="/logout" class="text-sm text-gray-400 hover:text-white">Выйти</a></div></nav>
+        <main class="flex-1 p-8 max-w-4xl mx-auto w-full">
+            <h2 class="text-lg font-semibold mb-4">Модули</h2>
+            <div class="grid gap-4">
+                ${mods.map(m => `<div class="bg-card p-4 rounded-lg border border-gray-700 flex justify-between items-center">
+                    <div><h3 class="font-bold text-white">${m.name}</h3><p class="text-xs text-gray-400">${m.enabled ? 'Активен и загружен' : 'Отключен'}</p></div>
+                    <form method="POST" action="/toggle"><input type="hidden" name="id" value="${m.module_id}"><input type="hidden" name="enabled" value="${m.enabled ? 0 : 1}">
+                    <button type="submit" class="px-4 py-2 rounded text-sm font-bold transition ${m.enabled ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30' : 'bg-green-500/20 text-green-400 hover:bg-green-500/30'}">${m.enabled ? 'Выключить' : 'Включить'}</button></form></div>`).join('')}
+            </div>
+            <div class="mt-8 text-center"><a href="/shop" class="inline-block bg-blurple hover:bg-indigo-700 text-white font-bold py-3 px-6 rounded-lg transition">🛒 Управление магазином</a></div>
+        </main>`));
 });
 
 app.post('/toggle', auth, async (req, res) => {
@@ -308,32 +339,109 @@ app.post('/toggle', auth, async (req, res) => {
 
 app.get('/shop', auth, (req, res) => {
     const items = db.prepare('SELECT * FROM shop_items').all();
-    res.send(layout('Магазин', \`<nav class="bg-card border-b border-gray-700 p-4 flex justify-between items-center"><h1 class="text-xl font-bold text-white">🛒 Магазин</h1><a href="/dashboard" class="text-sm text-gray-400">← Назад</a></nav>
+    res.send(layout('Магазин', `<nav class="bg-card border-b border-gray-700 p-4 flex justify-between items-center">
+        <h1 class="text-xl font-bold text-white">🛒 Управление магазином</h1>
+        <a href="/dashboard" class="text-sm text-gray-400 hover:text-white">← Назад</a></nav>
         <main class="flex-1 p-8 max-w-4xl mx-auto w-full">
-        <div class="bg-card p-6 rounded-lg border border-gray-700 mb-6"><h3 class="font-bold text-white mb-4">Добавить товар</h3>
-        <form method="POST" action="/shop-add" class="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <input name="name" placeholder="Название" required class="bg-darker border border-gray-600 rounded p-2 text-white">
-            <input name="price" type="number" placeholder="Цена" required class="bg-darker border border-gray-600 rounded p-2 text-white">
-            <input name="role_id" placeholder="ID Роли (необязательно)" class="bg-darker border border-gray-600 rounded p-2 text-white md:col-span-2">
-            <input name="description" placeholder="Описание" class="bg-darker border border-gray-600 rounded p-2 text-white md:col-span-2">
-            <button type="submit" class="md:col-span-2 bg-blurple hover:bg-indigo-700 text-white font-bold py-2 rounded">Добавить</button>
-        </form></div>
-        <div class="space-y-3">\${items.map(i => \`<div class="bg-card p-4 rounded-lg border border-gray-700 flex justify-between items-center">
-            <div><span class="font-bold text-white">\${i.name}</span> <span class="text-blurple font-bold ml-2">\${i.price} 💰</span><p class="text-xs text-gray-400 mt-1">\${i.description||''}</p></div>
-            <form method="POST" action="/shop-del"><input type="hidden" name="id" value="\${i.id}"><button type="submit" class="bg-red-500/20 text-red-400 px-3 py-1 rounded text-sm">Удалить</button></form></div>\`).join('')}</div></main>\`));
+            <div class="bg-card p-6 rounded-lg border border-gray-700 mb-6">
+                <h3 class="font-bold text-white mb-4">Добавить товар</h3>
+                <form method="POST" action="/shop-add" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <input name="name" placeholder="Название (напр. VIP)" required class="bg-darker border border-gray-600 rounded p-2 text-white">
+                    <input name="price" type="number" placeholder="Цена (монеты)" required class="bg-darker border border-gray-600 rounded p-2 text-white">
+                    <input name="role_id" placeholder="ID Роли (для автовыдачи, необязательно)" class="bg-darker border border-gray-600 rounded p-2 text-white md:col-span-2">
+                    <input name="description" placeholder="Описание товара" class="bg-darker border border-gray-600 rounded p-2 text-white md:col-span-2">
+                    <button type="submit" class="md:col-span-2 bg-blurple hover:bg-indigo-700 text-white font-bold py-2 rounded">Добавить товар</button>
+                </form>
+            </div>
+            <div class="space-y-3">
+                ${items.length === 0 ? '<p class="text-gray-500 text-center">Магазин пуст</p>' : ''}
+                ${items.map(item => `<div class="bg-card p-4 rounded-lg border border-gray-700 flex justify-between items-center">
+                    <div><span class="font-bold text-white">${item.name}</span><span class="text-blurple font-bold ml-2">${item.price} 💰</span>
+                    ${item.role_id ? `<span class="text-xs bg-gray-700 px-2 py-1 rounded ml-2">Role: ${item.role_id}</span>` : ''}
+                    <p class="text-xs text-gray-400 mt-1">${item.description || 'Нет описания'}</p></div>
+                    <form method="POST" action="/shop-del"><input type="hidden" name="id" value="${item.id}"><button type="submit" class="bg-red-500/20 text-red-400 hover:bg-red-500/30 px-3 py-1 rounded text-sm font-bold">Удалить</button></form></div>`).join('')}
+            </div>
+        </main>`));
 });
 
-app.post('/shop-add', auth, (req, res) => { db.prepare('INSERT INTO shop_items (name, price, role_id, description) VALUES (?, ?, ?, ?)').run(req.body.name, req.body.price, req.body.role_id||null, req.body.description); res.redirect('/shop'); });
+app.post('/shop-add', auth, (req, res) => { db.prepare('INSERT INTO shop_items (name, price, role_id, description) VALUES (?, ?, ?, ?)').run(req.body.name, req.body.price, req.body.role_id || null, req.body.description); res.redirect('/shop'); });
 app.post('/shop-del', auth, (req, res) => { db.prepare('DELETE FROM shop_items WHERE id = ?').run(req.body.id); res.redirect('/shop'); });
 
-app.listen(3000, async () => { console.log('🌐 Веб-панель: http://localhost:3000'); await startBot(); });
+const PORT = 3000;
+app.listen(PORT, async () => {
+    console.log(`🌐 Веб-панель запущена: http://localhost:${PORT}`);
+    await startBot();
+});
 EOF
 
-# 3. Запуск установки
+# 14. .gitignore
+cat << 'EOF' > .gitignore
+node_modules/
+data/
+.env
+EOF
+
+# 15. Запуск Docker
+echo ""
 echo "📦 Установка зависимостей и запуск через Docker..."
-if command -v docker-compose &> /dev/null || command -v docker &> /dev/null && docker compose version &> /dev/null; then
-    docker compose up -d --build
-    echo "✅ Успешно! Откройте в браузере: http://localhost:3000"
+echo ""
+
+# Функция определения IP сервера
+get_server_ip() {
+    local ip=$(curl -s --max-time 5 ifconfig.me 2>/dev/null || curl -s --max-time 5 ipinfo.io/ip 2>/dev/null)
+    if [ -z "$ip" ]; then
+        ip=$(hostname -I | awk '{print $1}')
+    fi
+    if [ -z "$ip" ]; then
+        ip="localhost"
+    fi
+    echo "$ip"
+}
+
+# Проверка Docker и запуск
+if command -v docker &> /dev/null && (docker compose version &> /dev/null || command -v docker-compose &> /dev/null); then
+    # Используем docker compose или docker-compose
+    if docker compose version &> /dev/null; then
+        docker compose up -d --build
+    else
+        docker-compose up -d --build
+    fi
+    
+    echo ""
+    echo "⏳ Ожидание запуска контейнера..."
+    sleep 5
+    
+    # Получаем IP
+    SERVER_IP=$(get_server_ip)
+    
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "✅ УСТАНОВКА ЗАВЕРШЕНА УСПЕШНО!"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    echo "🌐 Откройте веб-панель в браузере:"
+    echo ""
+    echo "   👉 http://${SERVER_IP}:3000"
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    echo "📋 Полезные команды:"
+    echo "   • Логи:        cd EDB && docker compose logs -f"
+    echo "   • Остановить:  cd EDB && docker compose stop"
+    echo "   • Запустить:   cd EDB && docker compose start"
+    echo "   • Перезапуск:  cd EDB && docker compose restart"
+    echo ""
+    echo "🔧 Если панель не открывается, проверьте:"
+    echo "   • Firewall:    sudo ufw allow 3000/tcp"
+    echo "   • Контейнер:   docker ps"
+    echo ""
 else
-    echo "⚠️ Docker не найден. Установите Docker и запустите 'docker-compose up -d --build' вручную."
+    echo "⚠️ Docker не найден!"
+    echo ""
+    echo "Установите Docker командой:"
+    echo "  sudo apt install docker.io docker-compose -y"
+    echo ""
+    echo "Затем запустите установку снова:"
+    echo "  ./install.sh"
+    exit 1
 fi
