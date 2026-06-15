@@ -10,7 +10,7 @@ if file "$0" | grep -q CRLF; then
     exec "$0" "$@"
 fi
 
-echo "🚀 Запуск установки Discord Бота (v5.0 Clean & Stable)..."
+echo "🚀 Запуск установки Discord Бота (v5.1 - Network Fix)..."
 
 # ==============================================================================
 # 1. ПРОВЕРКА И УСТАНОВКА ЗАВИСИМОСТЕЙ
@@ -39,7 +39,7 @@ fi
 # ==============================================================================
 # 1.5. ПОЛНАЯ ОЧИСТКА СТАРОЙ ВЕРСИИ
 # ==============================================================================
-echo "🧹 Очистка старых файлов для предотвращения конфликтов..."
+echo "🧹 Очистка старых файлов..."
 rm -rf core modules web data
 rm -f package.json package-lock.json docker-compose.yml Dockerfile index.js database.js .gitignore
 echo "✅ Очистка завершена."
@@ -52,7 +52,7 @@ mkdir -p core modules/economy modules/shop web/views data/uploads
 cat << 'EOF' > package.json
 {
   "name": "discord-bot-v5",
-  "version": "5.0.0",
+  "version": "5.1.0",
   "main": "index.js",
   "type": "module",
   "scripts": { "start": "node index.js" },
@@ -79,6 +79,7 @@ services:
       - ./data:/app/data
     environment:
       - NODE_ENV=production
+      - NODE_OPTIONS=--dns-result-order=ipv4first
 EOF
 
 cat << 'EOF' > Dockerfile
@@ -113,7 +114,6 @@ db.exec(`
     CREATE TABLE IF NOT EXISTS shop_items (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, price INTEGER, role_id TEXT, description TEXT, image_url TEXT);
 `);
 
-// Настройки экономики по умолчанию
 db.prepare("INSERT OR IGNORE INTO economy_config (key, value) VALUES ('currency_name', 'Монеты')").run();
 db.prepare("INSERT OR IGNORE INTO economy_config (key, value) VALUES ('currency_icon', '🪙')").run();
 
@@ -122,7 +122,11 @@ EOF
 
 cat << 'EOF' > core/botManager.js
 import { Client, GatewayIntentBits, Collection, REST, Routes } from 'discord.js';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import db from '../database.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 let bot = null;
 let botError = null;
@@ -150,8 +154,15 @@ export async function startBot() {
             GatewayIntentBits.Guilds,
             GatewayIntentBits.GuildMessages,
             GatewayIntentBits.MessageContent,
-            GatewayIntentBits.GuildMembers // Нужен для выдачи ролей
-        ] 
+            GatewayIntentBits.GuildMembers
+        ],
+        rest: {
+            timeout: 30000,
+            retries: 3
+        },
+        ws: {
+            large_threshold: 250
+        }
     });
     bot.commands = new Collection();
     
@@ -160,23 +171,28 @@ export async function startBot() {
     const commandsToRegister = [];
     for (const mod of modules) {
         try {
-            const module = await import(`file://${path.join(__dirname, '../modules', mod, 'index.js')}`);
+            const modulePath = path.join(__dirname, '../modules', mod, 'index.js');
+            const module = await import(`file://${modulePath}`);
             if (module.init) {
                 const cmds = module.init(bot, db);
                 if (cmds) commandsToRegister.push(...cmds);
                 console.log(`✅ Модуль [${mod}] загружен`);
             }
-        } catch (err) { console.error(`❌ Ошибка модуля [${mod}]:`, err); }
+        } catch (err) { 
+            console.error(`❌ Ошибка модуля [${mod}]:`, err.message); 
+        }
     }
 
     bot.once('ready', async () => {
         console.log(`✅ Бот подключен: ${bot.user.tag}`);
         if (commandsToRegister.length > 0 && settings.guild_id) {
-            const rest = new REST({ version: '10' }).setToken(settings.discord_token);
+            const rest = new REST({ version: '10', timeout: 30000 }).setToken(settings.discord_token);
             try {
                 await rest.put(Routes.applicationGuildCommands(settings.client_id, settings.guild_id), { body: commandsToRegister });
                 console.log(`✅ Зарегистрировано ${commandsToRegister.length} команд`);
-            } catch (e) { console.error('❌ Ошибка регистрации команд:', e.message); }
+            } catch (e) { 
+                console.error('❌ Ошибка регистрации команд:', e.message); 
+            }
         }
     });
 
@@ -192,8 +208,14 @@ export async function startBot() {
         }
     });
 
+    bot.on('error', (error) => {
+        console.error('❌ Ошибка Discord клиента:', error.message);
+    });
+
     try { 
+        console.log('🔌 Подключение к Discord...');
         await bot.login(settings.discord_token); 
+        console.log('✅ Успешное подключение к Discord');
     } catch (error) { 
         console.error('❌ Ошибка входа в Discord:', error.message); 
         botError = error.message; 
@@ -247,7 +269,6 @@ import { SlashCommandBuilder, EmbedBuilder } from 'discord.js';
 export function init(bot, db) {
     const cmds = [];
     
-    // Команда /shop
     const shopCmd = new SlashCommandBuilder().setName('shop').setDescription('Посмотреть товары в магазине');
     cmds.push(shopCmd);
     bot.commands.set('shop', { 
@@ -267,7 +288,6 @@ export function init(bot, db) {
         }
     });
 
-    // Команда /buy
     const buyCmd = new SlashCommandBuilder()
         .setName('buy')
         .setDescription('Купить товар')
@@ -291,20 +311,18 @@ export function init(bot, db) {
             const u = db.prepare('SELECT balance FROM users WHERE user_id = ? AND guild_id = ?').get(i.user.id, i.guildId) || { balance: 0 };
             if (u.balance < item.price) return i.reply({ content: `❌ Недостаточно средств. Нужно: ${item.price}, у вас: ${u.balance}`, ephemeral: true });
             
-            // Списание средств
             db.prepare('INSERT INTO users (user_id, guild_id, balance) VALUES (?, ?, ?) ON CONFLICT(user_id, guild_id) DO UPDATE SET balance = balance - ?')
               .run(i.user.id, i.guildId, u.balance - item.price, item.price);
               
             let msg = `✅ Вы успешно купили **${item.name}** за ${item.price} монет!`;
             
-            // Автовыдача роли
             if (item.role_id) {
                 try {
                     const member = await i.guild.members.fetch(i.user.id);
                     await member.roles.add(item.role_id);
                     msg += `\n🎭 Роль успешно выдана!`;
                 } catch (err) {
-                    msg += `\n⚠️ Не удалось выдать роль. Убедитесь, что роль бота находится ВЫШЕ покупаемой роли, и у бота есть право "Управлять ролями".`;
+                    msg += `\n⚠️ Не удалось выдать роль. Убедитесь, что роль бота находится ВЫШЕ покупаемой роли.`;
                 }
             }
             
@@ -350,7 +368,6 @@ const head = `<meta charset="UTF-8"><meta name="viewport" content="width=device-
 const layout = (title, content) => `<!DOCTYPE html><html lang="ru"><head>${head}<title>${title}</title></head><body class="bg-bg text-text min-h-screen flex flex-col">${content}<script>lucide.createIcons();</script></body></html>`;
 const auth = (req, res, next) => req.session.auth ? next() : res.redirect('/login');
 
-// --- AUTH & SETUP ---
 app.get('/', async (req, res) => {
     const s = getSettings();
     if (!s.admin_hash) {
@@ -379,15 +396,13 @@ app.get('/login', (req, res) => res.send(layout('Вход', `<div class="flex it
 app.post('/login', async (req, res) => { const s = getSettings(); if (req.body.user === s.admin_user && await bcrypt.compare(req.body.pass, s.admin_hash)) { req.session.auth = true; res.redirect('/dashboard'); } else { res.send(`<script>alert('Ошибка'); window.location='/login';</script>`); } });
 app.get('/logout', (req, res) => { req.session.destroy(); res.redirect('/login'); });
 
-// --- APIs ---
 app.post('/api/restart', auth, async (req, res) => { await startBot(); res.json({ success: true }); });
 
 app.get('/api/roles', auth, async (req, res) => {
     const bot = getBot(); const settings = getSettings();
-    if (!bot || !settings.guild_id) return res.status(500).json({ error: 'Бот оффлайн или не настроен' });
+    if (!bot || !settings.guild_id) return res.status(500).json({ error: 'Бот оффлайн' });
     const guild = bot.guilds.cache.get(settings.guild_id);
     if (!guild) return res.status(404).json({ error: 'Сервер не найден' });
-    // Фильтруем @everyone и сортируем по позиции
     const roles = guild.roles.cache.filter(r => r.id !== guild.id).sort((a, b) => b.position - a.position).map(r => ({ id: r.id, name: r.name, color: r.hexColor }));
     res.json(roles);
 });
@@ -430,13 +445,12 @@ app.post('/api/shop', upload.single('image'), auth, async (req, res) => {
 });
 app.delete('/api/shop/:id', auth, (req, res) => { db.prepare('DELETE FROM shop_items WHERE id = ?').run(req.params.id); res.json({ success: true }); });
 
-// --- UI ---
 app.get('/dashboard', auth, (req, res) => {
     const settings = getSettings();
     const bot = getBot();
     const isError = getBotError() !== null;
     const statusHtml = bot ? `<span class="text-green-400 flex items-center gap-2"><span class="w-2 h-2 rounded-full bg-green-500"></span> Онлайн</span>` : 
-                       (isError ? `<span class="text-red-400 flex items-center gap-2" title="${getBotError()}"><span class="w-2 h-2 rounded-full bg-red-500"></span> Ошибка токена</span>` : `<span class="text-yellow-400 flex items-center gap-2"><span class="w-2 h-2 rounded-full bg-yellow-500"></span> Ожидание настроек</span>`);
+                       (isError ? `<span class="text-red-400 flex items-center gap-2" title="${getBotError()}"><span class="w-2 h-2 rounded-full bg-red-500"></span> Ошибка</span>` : `<span class="text-yellow-400 flex items-center gap-2"><span class="w-2 h-2 rounded-full bg-yellow-500"></span> Ожидание</span>`);
 
     res.send(layout('Панель управления', `
         <nav class="bg-card border-b border-border px-6 py-4 flex justify-between items-center sticky top-0 z-10">
@@ -454,7 +468,6 @@ app.get('/dashboard', auth, (req, res) => {
                 <button onclick="showTab('channels')" id="tab-channels" class="pb-3 text-sm font-medium text-muted hover:text-white flex items-center gap-2"><i data-lucide="hash" class="icon"></i> Каналы</button>
             </div>
 
-            <!-- ECONOMY TAB -->
             <div id="view-economy" class="space-y-4">
                 <div class="bg-card border border-border rounded-xl p-6">
                     <h3 class="font-medium text-white mb-4 flex items-center gap-2"><i data-lucide="settings" class="icon"></i> Настройка валюты</h3>
@@ -466,7 +479,6 @@ app.get('/dashboard', auth, (req, res) => {
                 </div>
             </div>
 
-            <!-- SHOP TAB -->
             <div id="view-shop" class="hidden space-y-4">
                 <div class="bg-card border border-border rounded-xl p-6">
                     <h3 class="font-medium text-white mb-4 flex items-center gap-2"><i data-lucide="plus" class="icon"></i> Добавить товар</h3>
@@ -474,7 +486,7 @@ app.get('/dashboard', auth, (req, res) => {
                         <input name="name" placeholder="Название товара" required class="bg-bg border border-border rounded-lg px-3 py-2 text-white">
                         <input name="price" type="number" placeholder="Цена" required class="bg-bg border border-border rounded-lg px-3 py-2 text-white">
                         <select name="role_id" id="roleSelect" class="bg-bg border border-border rounded-lg px-3 py-2 text-white md:col-span-2">
-                            <option value="">-- Без выдачи роли (просто товар) --</option>
+                            <option value="">-- Без выдачи роли --</option>
                         </select>
                         <input name="description" placeholder="Описание" class="bg-bg border border-border rounded-lg px-3 py-2 text-white md:col-span-2">
                         <div class="md:col-span-2"><label class="block text-xs text-muted mb-1">Картинка товара (необязательно)</label><input type="file" name="image" accept="image/*" class="w-full text-sm text-muted file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-accent file:text-white"></div>
@@ -484,7 +496,6 @@ app.get('/dashboard', auth, (req, res) => {
                 <div id="shopList" class="space-y-3"></div>
             </div>
 
-            <!-- CHANNELS TAB -->
             <div id="view-channels" class="hidden space-y-4">
                 <div class="bg-card border border-border rounded-xl p-4">
                     <h3 class="font-medium text-white mb-4 flex items-center gap-2"><i data-lucide="plus" class="icon"></i> Создать канал</h3>
@@ -537,30 +548,28 @@ app.get('/dashboard', auth, (req, res) => {
                 e.preventDefault();
                 const fd = new FormData(e.target);
                 await fetch('/api/economy-config', { method: 'POST', body: new URLSearchParams(fd) });
-                alert('Сохранено! Нажмите "Перезапустить" в шапке, чтобы бот применил изменения.');
+                alert('Сохранено! Нажмите "Перезапустить" в шапке.');
             };
 
             async function loadShop() {
-                // Загрузка ролей для селекта
                 const rolesRes = await fetch('/api/roles');
                 const roles = await rolesRes.json();
                 const select = document.getElementById('roleSelect');
-                select.innerHTML = '<option value="">-- Без выдачи роли --</option>' + roles.map(r => \`<option value="\${r.id}">\${r.name}</option>\`).join('');
+                select.innerHTML = '<option value="">-- Без выдачи роли --</option>' + roles.map(r => `<option value="${r.id}">${r.name}</option>`).join('');
 
-                // Загрузка товаров
                 const itemsRes = await fetch('/api/shop');
                 const items = await itemsRes.json();
                 const list = document.getElementById('shopList');
                 list.innerHTML = items.map(item => {
                     const roleName = roles.find(r => r.id === item.role_id)?.name || 'Нет';
-                    const img = item.image_url ? \`<img src="\${item.image_url}" class="w-10 h-10 rounded object-cover">\` : '<div class="w-10 h-10 rounded bg-zinc-800 flex items-center justify-center"><i data-lucide="package" class="icon text-muted"></i></div>';
-                    return \`<div class="bg-card border border-border rounded-xl p-4 flex justify-between items-center">
-                        <div class="flex items-center gap-4">\${img}
-                            <div><div class="font-medium text-white">\${item.name} <span class="text-xs bg-accent/10 text-accent px-2 py-0.5 rounded-full">\${item.price} монет</span></div>
-                            <div class="text-xs text-muted mt-1">Роль: \${roleName} | \${item.description || 'Без описания'}</div></div>
+                    const img = item.image_url ? `<img src="${item.image_url}" class="w-10 h-10 rounded object-cover">` : '<div class="w-10 h-10 rounded bg-zinc-800 flex items-center justify-center"><i data-lucide="package" class="icon text-muted"></i></div>';
+                    return `<div class="bg-card border border-border rounded-xl p-4 flex justify-between items-center">
+                        <div class="flex items-center gap-4">${img}
+                            <div><div class="font-medium text-white">${item.name} <span class="text-xs bg-accent/10 text-accent px-2 py-0.5 rounded-full">${item.price} монет</span></div>
+                            <div class="text-xs text-muted mt-1">Роль: ${roleName} | ${item.description || 'Без описания'}</div></div>
                         </div>
-                        <button onclick="deleteShopItem('\${item.id}')" class="text-red-400 hover:text-red-300 p-2"><i data-lucide="trash-2" class="icon"></i></button>
-                    </div>\`;
+                        <button onclick="deleteShopItem('${item.id}')" class="text-red-400 hover:text-red-300 p-2"><i data-lucide="trash-2" class="icon"></i></button>
+                    </div>`;
                 }).join('') || '<p class="text-muted text-center py-8">Магазин пуст</p>';
                 lucide.createIcons();
             }
@@ -580,10 +589,10 @@ app.get('/dashboard', auth, (req, res) => {
                 const data = await res.json();
                 const list = document.getElementById('channelList');
                 if (data.error) { list.innerHTML = '<p class="text-red-400 text-center py-8">' + data.error + '</p>'; return; }
-                list.innerHTML = data.map(c => \`<div class="bg-bg border border-border rounded-lg p-3 flex justify-between items-center">
-                    <div class="flex items-center gap-3"><i data-lucide="\${c.type === 'voice' ? 'volume-2' : (c.type === 'category' ? 'folder' : 'hash')}" class="icon text-muted"></i><span class="text-sm text-white">\${c.name}</span></div>
-                    <button onclick="deleteChannel('\${c.id}')" class="text-red-400 hover:text-red-300 p-1"><i data-lucide="trash-2" class="icon"></i></button>
-                </div>\`).join('');
+                list.innerHTML = data.map(c => `<div class="bg-bg border border-border rounded-lg p-3 flex justify-between items-center">
+                    <div class="flex items-center gap-3"><i data-lucide="${c.type === 'voice' ? 'volume-2' : (c.type === 'category' ? 'folder' : 'hash')}" class="icon text-muted"></i><span class="text-sm text-white">${c.name}</span></div>
+                    <button onclick="deleteChannel('${c.id}')" class="text-red-400 hover:text-red-300 p-1"><i data-lucide="trash-2" class="icon"></i></button>
+                </div>`).join('');
                 lucide.createIcons();
             }
             document.getElementById('channelForm').onsubmit = async (e) => {
@@ -639,6 +648,8 @@ echo "🌐 Откройте веб-панель:"
 [ -n "$LOCAL_IP" ] && echo "   👉 http://${LOCAL_IP}:3000"
 echo "   👉 http://localhost:3000"
 echo ""
-echo "💡 СОВЕТ: Если бот не запускается, проверьте в панели хостинга,"
-echo "   что включены все 3 'Privileged Gateway Intents' (Presence, Server Members, Message Content)."
+echo "💡 ИСПРАВЛЕНИЯ В v5.1:"
+echo "   • Добавлен импорт 'path' (исправлена ошибка модуля shop)"
+echo "   • Принудительное использование IPv4 для Discord"
+echo "   • Увеличены таймауты и добавлены retry"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
