@@ -7,7 +7,7 @@ Self-hosted решение для управления экономикой, м�
 ![Docker](https://img.shields.io/badge/docker-required-2496ED?style=flat-square)
 ![License](https://img.shields.io/badge/license-MIT-yellow?style=flat-square)
 
-[Документация](#документация) | [Быстрый старт](#быстрый-старт) | [Команды](#команды-бота) | [Решение проблем](#решение-проблем)
+[Документация](#документация) | [Быстрый старт](#быстрый-старт) 
 
 ---
 
