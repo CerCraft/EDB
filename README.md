@@ -1,48 +1,55 @@
-<div align="center">
+# EDB — Модульный Discord Бот с Веб-Панелью
 
-#   EDB — Модульный Discord Бот
+Self-hosted решение для управления экономикой, магазином и инфраструктурой Discord-сервера.
 
-**Self-hosted бот с веб-панелью управления экономикой, магазином и каналами сервера**
+![Version](https://img.shields.io/badge/version-6.0.0-5865F2?style=flat-square)
+![Node](https://img.shields.io/badge/node-20+-43853d?style=flat-square)
+![Docker](https://img.shields.io/badge/docker-required-2496ED?style=flat-square)
+![License](https://img.shields.io/badge/license-MIT-yellow?style=flat-square)
 
-[![Version](https://img.shields.io/badge/version-6.0.0-5865F2?style=flat-square)](https://github.com/CerCraft/EDB)
-[![Node](https://img.shields.io/badge/node-20+-43853d?style=flat-square&logo=node.js&logoColor=white)](https://nodejs.org/)
-[![Docker](https://img.shields.io/badge/docker-required-2496ED?style=flat-square&logo=docker&logoColor=white)](https://www.docker.com/)
-[![License](https://img.shields.io/badge/license-MIT-yellow?style=flat-square)](LICENSE)
-
-[📖 Документация](https://cercraft.github.io/EDB-Doc)
-
-</div>
+[Документация](#документация) | [Быстрый старт](#быстрый-старт) | [Команды](#команды-бота) | [Решение проблем](#решение-проблем)
 
 ---
 
-## ✨ Возможности
+## Возможности
 
-- 🏪 **Магазин с автовыдачей ролей** — добавляйте товары и привязывайте к ролям Discord
-- 💰 **Гибкая экономика** — настройте название и иконку валюты
-- 📺 **Управление каналами** — создавайте и удаляйте каналы прямо из веб-панели
-- 🎨 **Минималистичный UI** — профессиональный дизайн в стиле Discord
-- 🔄 **Горячая перезагрузка** — изменения применяются без перезапуска контейнера
-- 📦 **Docker-ready** — запуск одной командой
-- 🛡️ **Безопасность** — пароли хешируются через bcrypt
-
----
-
-## 📖 Документация
-
-Полная документация с инструкциями, скриншотами и примерами доступна по ссылке:
-
-### 👉 **[Открыть документацию](https://cercraft.github.io/EDB-Doc)**
+> * **Магазин с автовыдачей ролей:** добавление товаров и мгновенная привязка к ролям Discord при покупке.
+> * **Гибкая экономика:** полная кастомизация названия и символа внутренней валюты сервера.
+> * **Управление каналами:** создание текстовых, голосовых каналов и категорий прямо из веб-интерфейса.
+> * **Минималистичный UI:** профессиональная админ-панель, выполненная в стилистике Discord (Tailwind CSS).
+> * **Горячая перезагрузка:** применение изменений в настройках без перезапуска Docker-контейнера.
+> * **Безопасность:** хеширование паролей администратора через bcrypt, изоляция данных.
+> * **Автоматическая установка:** скрипт сам проверит и установит все системные зависимости.
 
 ---
 
-## 🚀 Быстрый старт
+## Стек технологий
 
-### Требования
-- Ubuntu 20.04+ / Debian 11+
-- Docker и Docker Compose (установятся автоматически)
-- 512 MB RAM, 1 GB диск
+- **Backend:** Node.js, Express.js, discord.js (v14)
+- **Database:** SQLite (better-sqlite3)
+- **Frontend (Admin Panel):** EJS, Tailwind CSS, Vanilla JS, Lucide Icons
+- **DevOps:** Docker, Docker Compose, Bash
 
-### Установка в одну команду
+---
+
+## Документация
+
+Полная документация с подробными инструкциями, скриншотами и примерами конфигурации доступна по ссылке:
+
+>> **[Открыть полную документацию](https://cercraft.github.io/EDB-Doc)**
+
+---
+
+## Быстрый старт
+
+### Системные требования
+- ОС: Ubuntu 20.04+ / Debian 11+
+- Ресурсы: от 512 MB RAM, 1 GB свободного места на диске
+- Сеть: доступ к Discord API (порт 443)
+
+### Установка
+
+Выполните следующие команды в терминале вашего сервера:
 
 ```bash
 git clone https://github.com/CerCraft/EDB.git
